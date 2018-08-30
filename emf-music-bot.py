@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-import twython
-from datetime import datetime, timedelta
+from twython import Twython, TwythonStreamer, TwythonError
+from twitter_keys import *
+from datetime import datetime, timedelta, timezone
 from googleapiclient.discovery import build
 from httplib2 import Http
 from oauth2client import file, client, tools
-from calendar_config import *
+from google_config import *
+import time
 
 # If modifying these scopes, delete the file token.json.
-SCOPES = 'https://www.googleapis.com/auth/calendar.readonly'
+SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/spreadsheets.readonly']
+locations = {'dj_calendar': 'the Cybar', 'live_calendar': 'Stage C'}
+
+debug = True
+dry_run = True
+sleep_time = 30
 
 
 class Event:
 
-    def __init__(self, name, id, cal_id):
+    def __init__(self, name=None, id=None, cal_id=None):
         self.name = name
         self.id = id
         self.cal_id = cal_id
@@ -20,6 +27,7 @@ class Event:
         self.end_time = None
         self.started = False
         self.description = None
+        self.location = None
         self.have_tweeted_current = False
         self.have_tweeted_next = False
 
@@ -45,10 +53,29 @@ def fetchEvents(service, cal_id):
     else:
         return(events)
 
+
+def getTwitterHandle(sheets, name):
+
+    results = sheets.spreadsheets().values().get(spreadsheetId=gsheets['spreadsheet_id'], range=gsheets['name_range']).execute()
+    names = results.get('values', [])
+    for n in names:
+        if name in n:
+            # offset by 2 for header row and 1 indexing.
+            idx = str(2 + names.index(n))
+
+    try:
+        results = sheets.spreadsheets().values().get(spreadsheetId=gsheets['spreadsheet_id'], range=gsheets['twitter_col']+idx).execute()
+        twitter_handle = results.get('values', [])[0][0]
+        return twitter_handle
+    except:
+        return None
+
+
+
 def parseEvents(events):
 
-    current = None
-    next_up = None
+    current = Event()
+    next_up = Event()
 
     start = datetime.fromisoformat(events[0]['start'].get('dateTime'))
     tz_info = start.tzinfo
@@ -59,7 +86,8 @@ def parseEvents(events):
         current.start_time = datetime.fromisoformat(events[0]['start'].get('dateTime'))
         current.end_time = datetime.fromisoformat(events[0]['end'].get('dateTime'))
         try:
-            current.name = events[0]['description']
+            current.name = events[0]['summary']
+            current.description = events[0]['description']
         except:
             pass
 
@@ -69,7 +97,8 @@ def parseEvents(events):
             next_up.start_time = datetime.fromisoformat(events[1]['start'].get('dateTime'))
             next_up.end_time = datetime.fromisoformat(events[1]['end'].get('dateTime'))
             try:
-                next_up.name = events[1]['description']
+                next_up.name = events[1]['summary']
+                next_up.description = events[1]['description']
             except:
                 pass
         except:
@@ -80,7 +109,8 @@ def parseEvents(events):
         next_up.start_time = datetime.fromisoformat(events[0]['start'].get('dateTime'))
         next_up.end_time = datetime.fromisoformat(events[0]['end'].get('dateTime'))
         try:
-            next_up.name = events[1]['description']
+            next_up.name = events[1]['summary']
+            next_up.description = events[1]['description']
         except:
             pass
 
@@ -88,56 +118,99 @@ def parseEvents(events):
 
     return(r)
 
-def tweet_now(show):
+
+def tweet_now(twitter, show, location, twitter_handle=None):
     try:
-        if getattr(show, 'name') is not None:
-            print('Currently Playing: %s' % getattr(show, 'name'))
+        if getattr(show, 'name', None) is not None:
+            if twitter_handle:
+                name = twitter_handle
+            else:
+                name = getattr(show, 'name')
+            msg = '%s is playing now over in %s' % (name, location)
+            tweet(twitter, msg)
     except:
+        print('ERROR: Couldn\'t tweet: %s' % msg)
+
+
+def tweet_next(twitter, show, location, delta, twitter_handle=None):
+    try:
+        if getattr(show, 'name', None) is not None:
+            description = getattr(show, 'description', None)
+            if twitter_handle:
+                name = twitter_handle
+            else:
+                name = getattr(show, 'name')
+            if description is not None:
+                msg = 'In %d minutes, %s, %s, in %s' % (delta, name, description, location)
+            else:
+                msg = 'In %d minutes, %s will be playing in %s' % (delta, name, location)
+            tweet(twitter, msg)
+    except:
+        print('ERROR: Couldn\'t tweet: %s' % msg)
+
+
+def tweet(twitter, msg):
+    print('Tweeting: %s' % msg)
+    try:
+        if not dry_run:
+            twitter.update_status(status=msg)
+
+    except TwythonError as e:
+        if debug:
+            print(e)
         pass
 
-def tweet_next(show):
-    try:
-        if getattr(show, 'name') is not None:
-            print('Next Up: %s' % getattr(show, 'name'))
-    except:
-        pass
 
 def main():
 
+    twitter = Twython(APP_KEY, APP_SECRET, ACCESS_KEY, ACCESS_SECRET)
     store = file.Storage('token.json')
     creds = store.get()
     if not creds or creds.invalid:
         flow = client.flow_from_clientsecrets('credentials.json', SCOPES)
         creds = tools.run_flow(flow, store)
     service = build('calendar', 'v3', http=creds.authorize(Http()))
+    sheets = build('sheets', 'v4', http=creds.authorize(Http()))
+    current = Event()
+    next_up = Event()
 
-    for cal in goog_calendars:
-        events = fetchEvents(service, goog_calendars[cal])
-        if events:
-            new = parseEvents(events)
-            print()
-            try:
-                if current['name'] == getattr(new['current'], 'name'):
+    while True:
+        for cal in goog_calendars:
+            location = locations[cal]
+            events = fetchEvents(service, goog_calendars[cal])
+            if events:
+                new = parseEvents(events)
+                print()
+                if getattr(current, 'name', None) == getattr(new['current'], 'name', None):
+                    if debug:
+                        print('DEBUG: %s are still playing in %s' % (getattr(current, 'name'), location))
                     pass
-                else:
+
+                elif getattr(new['current'], 'name', None) is not None:
                     current = new['current']
-                    tweet_now(current)
-            except:
-                current = new['current']
-                tweet_now(current)
-
-            try:
-                if next_up['name'] == getattr(new['next_up'], 'name'):
+                    twitter_handle = getTwitterHandle(sheets, getattr(new['current'], 'name'))
+                    if twitter_handle:
+                        tweet_now(twitter, current, location, twitter_handle)
+                    else:
+                        tweet_now(twitter, current, location)
+                    current.tweeted_current()
+                if getattr(next_up, 'name', None) == getattr(new['next_up'], 'name', None):
+                    if debug:
+                        print('DEBUG: %s is still next up in %s' % (getattr(next_up, 'name'), location))
                     pass
-                else:
+                elif getattr(new['next_up'], 'name') is not None:
                     next_up = new['next_up']
-                    tweet_next(next_up)
-            except:
-                next_up = new['next_up']
-                tweet_next(next_up)
+                    delta = int(((getattr(next_up, 'start_time') - datetime.now(timezone.utc)) / timedelta(minutes=1)))
+                    if delta <= 15:
+                        twitter_handle = getTwitterHandle(sheets, getattr(new['next_up'], 'name'))
+                        if twitter_handle:
+                            tweet_next(twitter, next_up, location, delta, twitter_handle)
+                        else:
+                            tweet_next(twitter, next_up, location, delta)
+            elif debug:
+                print('DEBUG: No upcoming events found in calendar: %s' % cal)
 
-        else:
-            print('No upcoming events found in calendar: %s' % cal)
+        time.sleep(sleep_time)
 
 
 
