@@ -42,7 +42,6 @@ class Event:
 def fetchEvents(service, cal_id):
     # Call the Calendar API
     now = datetime.utcnow().isoformat() # + 'Z' # 'Z' indicates UTC time
-    #now = datetime.utcnow().isoformat() + '+01:00'
     future = str(datetime.isoformat(datetime.fromisoformat(now) + timedelta(hours=1)))
     events_result = service.events().list(calendarId=cal_id, timeMin=now + 'Z', timeMax=future + 'Z',
                                           maxResults=2, singleEvents=True, orderBy='startTime').execute()
@@ -183,7 +182,7 @@ def main():
                 print()
                 if getattr(current, 'name', None) == getattr(new['current'], 'name', None):
                     if debug:
-                        print('DEBUG: %s are still playing in %s' % (getattr(current, 'name'), location))
+                        print('DEBUG: %s is still playing in %s' % (getattr(current, 'name'), location))
                     pass
 
                 elif getattr(new['current'], 'name', None) is not None:
