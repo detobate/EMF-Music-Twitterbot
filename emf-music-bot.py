@@ -10,11 +10,11 @@ import time
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/spreadsheets.readonly']
-locations = {'dj_calendar': 'the Cybar', 'live_calendar': 'Stage C'}
+locations = {'dj_calendar': 'Null Sector', 'live_calendar': 'Stage B'}
 
 debug = True
 dry_run = True
-sleep_time = 30
+sleep_time = 300
 
 
 class Event:
@@ -153,6 +153,7 @@ def tweet(twitter, msg):
     try:
         if not dry_run:
             twitter.update_status(status=msg)
+        pass
 
     except TwythonError as e:
         if debug:
@@ -185,6 +186,7 @@ def main():
                         print('DEBUG: %s is still playing in %s' % (getattr(current, 'name'), location))
                     pass
 
+                #Check currently playing
                 elif getattr(new['current'], 'name', None) is not None:
                     current = new['current']
                     twitter_handle = getTwitterHandle(sheets, getattr(new['current'], 'name'))
@@ -193,7 +195,9 @@ def main():
                     else:
                         tweet_now(twitter, current, location)
                     current.tweeted_current()
-                if getattr(next_up, 'name', None) == getattr(new['next_up'], 'name', None):
+
+                # Check next up
+                if getattr(next_up, 'name') == getattr(new['next_up'], 'name'):
                     if debug:
                         print('DEBUG: %s is still next up in %s' % (getattr(next_up, 'name'), location))
                     pass
